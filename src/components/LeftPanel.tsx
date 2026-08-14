@@ -59,6 +59,18 @@ interface LeftPanelProps {
   setLineToolRadius?: (val: number) => void;
   lineToolSmoothness?: number;
   setLineToolSmoothness?: (val: number) => void;
+  lineToolMode?: 'reshape' | 'extrude_part' | 'point_edit';
+  setLineToolMode?: (mode: 'reshape' | 'extrude_part' | 'point_edit') => void;
+  lineToolPartType?: 'crease' | 'eyelash' | 'ear' | 'branch' | 'freeform';
+  setLineToolPartType?: (type: 'crease' | 'eyelash' | 'ear' | 'branch' | 'freeform') => void;
+  lineToolPartStrokeColor?: string;
+  setLineToolPartStrokeColor?: (color: string) => void;
+  lineToolPartFillColor?: string;
+  setLineToolPartFillColor?: (color: string) => void;
+  lineToolPartStrokeWidth?: number;
+  setLineToolPartStrokeWidth?: (width: number) => void;
+  lineToolActiveSubPathIdx?: number | null;
+  setLineToolActiveSubPathIdx?: (idx: number | null) => void;
   brushSettings?: BrushSettings;
   setBrushSettings?: React.Dispatch<React.SetStateAction<BrushSettings>>;
   add3DModel?: (type: 'car' | 'character' | 'chair' | 'sphere' | 'box' | 'sword') => void;
@@ -111,6 +123,18 @@ export default function LeftPanel({
   setLineToolRadius,
   lineToolSmoothness = 0.75,
   setLineToolSmoothness,
+  lineToolMode = 'reshape',
+  setLineToolMode,
+  lineToolPartType = 'crease',
+  setLineToolPartType,
+  lineToolPartStrokeColor = '#000000',
+  setLineToolPartStrokeColor,
+  lineToolPartFillColor = 'transparent',
+  setLineToolPartFillColor,
+  lineToolPartStrokeWidth = 3,
+  setLineToolPartStrokeWidth,
+  lineToolActiveSubPathIdx = null,
+  setLineToolActiveSubPathIdx,
   brushSettings,
   setBrushSettings,
   add3DModel,
@@ -740,125 +764,422 @@ export default function LeftPanel({
               </div>
             </div>
 
-            {/* 〰️ Line Shape Reshape Tool (LIN) - Full Feature Panel */}
+            {/* 〰️ Line Tool (LIN) - Shape Reshape, Stretch New Part & Point Edit Panel */}
             {activeTool === 'LIN' && (
               <div className="border border-cyan-500/40 bg-neutral-950/95 rounded-2xl p-3.5 space-y-3.5 shrink-0 shadow-xl shadow-cyan-950/30 animate-fade-in" id="lin-tool-left-panel">
+                {/* Header */}
                 <div className="flex items-center justify-between text-cyan-400">
                   <div className="flex items-center gap-2 font-bold">
                     <Spline className="w-4 h-4 text-cyan-400 animate-pulse" />
                     <span className="text-[11px] font-black uppercase tracking-wider font-sans">Line Tool (LIN)</span>
                   </div>
                   <span className="bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-[8px] font-black px-2 py-0.5 rounded-full uppercase">
-                    Shape Reshaper
+                    {lineToolMode === 'reshape' ? 'Reshaper' : lineToolMode === 'extrude_part' ? 'Stretch Part' : 'Point Edit'}
                   </span>
                 </div>
 
+                {/* 3 Main Mode Switchers */}
+                <div className="grid grid-cols-3 gap-1 bg-neutral-900/90 p-1 rounded-xl border border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => setLineToolMode && setLineToolMode('reshape')}
+                    className={`py-1.5 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                      lineToolMode === 'reshape'
+                        ? 'bg-cyan-500 text-neutral-950 shadow-md font-extrabold scale-[1.02]'
+                        : 'text-neutral-400 hover:text-cyan-300 hover:bg-neutral-800'
+                    }`}
+                    title="Pull and reshape existing stroke contours smoothly"
+                  >
+                    <Spline className="w-3.5 h-3.5" />
+                    <span className="leading-tight">Reshape</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLineToolMode && setLineToolMode('extrude_part')}
+                    className={`py-1.5 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                      lineToolMode === 'extrude_part'
+                        ? 'bg-cyan-500 text-neutral-950 shadow-md font-extrabold scale-[1.02]'
+                        : 'text-neutral-400 hover:text-cyan-300 hover:bg-neutral-800'
+                    }`}
+                    title="Drag down/up from line to stretch & generate new attached stroke/shape (e.g. eye fold, eyelash, ear, nose)"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span className="leading-tight">Stretch Part</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setLineToolMode && setLineToolMode('point_edit')}
+                    className={`py-1.5 px-1 rounded-lg text-[9px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                      lineToolMode === 'point_edit'
+                        ? 'bg-cyan-500 text-neutral-950 shadow-md font-extrabold scale-[1.02]'
+                        : 'text-neutral-400 hover:text-cyan-300 hover:bg-neutral-800'
+                    }`}
+                    title="Click on strokes to place new points, drag points to reshape with precision"
+                  >
+                    <GitCommit className="w-3.5 h-3.5" />
+                    <span className="leading-tight">Point Edit</span>
+                  </button>
+                </div>
+
+                {/* Status / Instructions Header */}
                 <div className="bg-cyan-500/10 border border-cyan-500/20 rounded-xl p-2.5 text-[9px] text-cyan-200/90 leading-relaxed font-medium">
                   {selectedObjectId && objects[selectedObjectId] ? (
-                    <p>
-                      Active on <b>{objects[selectedObjectId].name}</b>. The line path exactly traces the stroke contour. <b>Drag any point or segment of the line</b> to pull and reshape in real time.
-                    </p>
+                    <div>
+                      {lineToolMode === 'reshape' && (
+                        <p>
+                          Active on <b>{objects[selectedObjectId].name}</b>. <b>Drag any point or segment</b> along the line to pull & deform contours smoothly.
+                        </p>
+                      )}
+                      {lineToolMode === 'extrude_part' && (
+                        <p>
+                          <b>Stretch Mode Active:</b> Click and drag from any edge/line on <b>{objects[selectedObjectId].name}</b>. Dragging stretches out a <b>new attached stroke/shape</b> (e.g., eye blink fold, eyelash, ear, nose) that is strictly part of the <b>same single drawing</b>!
+                        </p>
+                      )}
+                      {lineToolMode === 'point_edit' && (
+                        <p>
+                          <b>Point Edit Active:</b> <b>Click on the stroke</b> to place new points anywhere. <b>Click & drag points</b> to reshape strokes directly.
+                        </p>
+                      )}
+                    </div>
                   ) : (
                     <p>
-                      Click on any drawing or circle on the canvas. An exact stroke line will appear directly on it for dragging and reshaping!
+                      Click on any drawing or character feature on canvas to enable the on-stroke Line Tool.
                     </p>
                   )}
                 </div>
 
-                {/* Influence Radius Slider */}
-                <div className="space-y-1.5 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800">
-                  <div className="flex items-center justify-between text-[9px]">
-                    <span className="text-neutral-300 font-bold uppercase tracking-wide">Pull Influence Radius</span>
-                    <span className="text-cyan-400 font-mono font-black">{lineToolRadius}px</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="20"
-                    max="300"
-                    step="5"
-                    value={lineToolRadius}
-                    onChange={(e) => setLineToolRadius && setLineToolRadius(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-neutral-950 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                  />
-                  <div className="flex justify-between text-[8px] text-neutral-500 font-mono">
-                    <span>20px (Precise)</span>
-                    <span>300px (Broad)</span>
-                  </div>
-                </div>
-
-                {/* Smooth Tension Slider */}
-                <div className="space-y-1.5 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800">
-                  <div className="flex items-center justify-between text-[9px]">
-                    <span className="text-neutral-300 font-bold uppercase tracking-wide">Smooth Tension / Curve</span>
-                    <span className="text-cyan-400 font-mono font-black">{Math.round(lineToolSmoothness * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1.0"
-                    step="0.05"
-                    value={lineToolSmoothness}
-                    onChange={(e) => setLineToolSmoothness && setLineToolSmoothness(parseFloat(e.target.value))}
-                    className="w-full h-1.5 bg-neutral-950 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                  />
-                </div>
-
-                {/* Line Shape Helpers */}
-                {selectedObjectId && objects[selectedObjectId] && (
-                  <div className="space-y-1.5 pt-1">
-                    <span className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider block">Contour Actions</span>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const obj = objects[selectedObjectId];
-                          if (!obj || !obj.points || obj.points.length < 3) return;
-                          // Apply Laplacian smoothing filter to points
-                          const pts = [...obj.points];
-                          const smoothed = pts.map((p, i) => {
-                            if (i === 0 || i === pts.length - 1) return p;
-                            const prev = pts[i - 1];
-                            const next = pts[i + 1];
-                            return {
-                              x: Number((p.x * 0.5 + (prev.x + next.x) * 0.25).toFixed(2)),
-                              y: Number((p.y * 0.5 + (prev.y + next.y) * 0.25).toFixed(2)),
-                            };
-                          });
-                          updateObject(selectedObjectId, { points: smoothed });
-                        }}
-                        className="p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-cyan-500/40 text-cyan-300 text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer shadow-sm"
-                        title="Smooth out sharp kinks or bumps along the stroke"
-                      >
-                        <Activity className="w-3 h-3 text-cyan-400" />
-                        <span>Smooth Curve</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const obj = objects[selectedObjectId];
-                          if (!obj || !obj.points || obj.points.length < 2) return;
-                          // Subdivide: insert midpoints between all points for finer resolution
-                          const pts = obj.points;
-                          const newPts: any[] = [];
-                          for (let i = 0; i < pts.length; i++) {
-                            newPts.push(pts[i]);
-                            if (i < pts.length - 1) {
-                              newPts.push({
-                                x: Number(((pts[i].x + pts[i + 1].x) / 2).toFixed(2)),
-                                y: Number(((pts[i].y + pts[i + 1].y) / 2).toFixed(2)),
-                              });
-                            }
-                          }
-                          updateObject(selectedObjectId, { points: newPts });
-                        }}
-                        className="p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-cyan-500/40 text-cyan-300 text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer shadow-sm"
-                        title="Insert additional points along the stroke for higher resolution curve pulling"
-                      >
-                        <Spline className="w-3 h-3 text-cyan-400" />
-                        <span>Subdivide +</span>
-                      </button>
+                {/* MODE 1: RESHAPE CONTROLS */}
+                {lineToolMode === 'reshape' && (
+                  <div className="space-y-3">
+                    {/* Influence Radius Slider */}
+                    <div className="space-y-1.5 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800">
+                      <div className="flex items-center justify-between text-[9px]">
+                        <span className="text-neutral-300 font-bold uppercase tracking-wide">Pull Influence Radius</span>
+                        <span className="text-cyan-400 font-mono font-black">{lineToolRadius}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="20"
+                        max="300"
+                        step="5"
+                        value={lineToolRadius}
+                        onChange={(e) => setLineToolRadius && setLineToolRadius(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-neutral-950 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                      />
+                      <div className="flex justify-between text-[8px] text-neutral-500 font-mono">
+                        <span>20px (Tight)</span>
+                        <span>300px (Broad)</span>
+                      </div>
                     </div>
+
+                    {/* Smooth Tension Slider */}
+                    <div className="space-y-1.5 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800">
+                      <div className="flex items-center justify-between text-[9px]">
+                        <span className="text-neutral-300 font-bold uppercase tracking-wide">Smooth Tension / Curve</span>
+                        <span className="text-cyan-400 font-mono font-black">{Math.round(lineToolSmoothness * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1.0"
+                        step="0.05"
+                        value={lineToolSmoothness}
+                        onChange={(e) => setLineToolSmoothness && setLineToolSmoothness(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-neutral-950 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                      />
+                    </div>
+
+                    {/* Line Shape Helpers */}
+                    {selectedObjectId && objects[selectedObjectId] && (
+                      <div className="space-y-1.5 pt-1">
+                        <span className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider block">Contour Actions</span>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const obj = objects[selectedObjectId];
+                              if (!obj || !obj.points || obj.points.length < 3) return;
+                              const pts = [...obj.points];
+                              const smoothed = pts.map((p, i) => {
+                                if (i === 0 || i === pts.length - 1) return p;
+                                const prev = pts[i - 1];
+                                const next = pts[i + 1];
+                                return {
+                                  x: Number((p.x * 0.5 + (prev.x + next.x) * 0.25).toFixed(2)),
+                                  y: Number((p.y * 0.5 + (prev.y + next.y) * 0.25).toFixed(2)),
+                                };
+                              });
+                              updateObject(selectedObjectId, { points: smoothed });
+                            }}
+                            className="p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-cyan-500/40 text-cyan-300 text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer shadow-sm"
+                            title="Smooth out sharp kinks or bumps along the stroke"
+                          >
+                            <Activity className="w-3 h-3 text-cyan-400" />
+                            <span>Smooth Curve</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const obj = objects[selectedObjectId];
+                              if (!obj || !obj.points || obj.points.length < 2) return;
+                              const pts = obj.points;
+                              const newPts: any[] = [];
+                              for (let i = 0; i < pts.length; i++) {
+                                newPts.push(pts[i]);
+                                if (i < pts.length - 1) {
+                                  newPts.push({
+                                    x: Number(((pts[i].x + pts[i + 1].x) / 2).toFixed(2)),
+                                    y: Number(((pts[i].y + pts[i + 1].y) / 2).toFixed(2)),
+                                  });
+                                }
+                              }
+                              updateObject(selectedObjectId, { points: newPts });
+                            }}
+                            className="p-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-cyan-500/40 text-cyan-300 text-[9px] font-black uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer shadow-sm"
+                            title="Insert additional points along the stroke for higher resolution curve pulling"
+                          >
+                            <Spline className="w-3 h-3 text-cyan-400" />
+                            <span>Subdivide +</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* MODE 2: STRETCH & GENERATE NEW PART */}
+                {lineToolMode === 'extrude_part' && (
+                  <div className="space-y-3 animate-fade-in">
+                    {/* Part Shape Presets */}
+                    <div className="space-y-1.5 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800">
+                      <div className="flex items-center justify-between text-[9px]">
+                        <span className="text-neutral-300 font-bold uppercase tracking-wide">New Part Style Preset</span>
+                        <span className="text-cyan-400 font-mono font-bold capitalize">{lineToolPartType}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5 pt-1">
+                        {[
+                          { id: 'crease', label: '👁️ Eyelid/Fold', desc: 'Curved arch connected to line' },
+                          { id: 'eyelash', label: '✨ Lash / Spike', desc: 'Pointed tapered spike' },
+                          { id: 'ear', label: '👂 Ear / Lobe', desc: 'Lobe loop with contour' },
+                          { id: 'branch', label: '👃 Nose / Ridge', desc: 'Ridge profile with tip' },
+                          { id: 'freeform', label: '〰️ Freeform', desc: 'Direct drag contour' },
+                        ].map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setLineToolPartType && setLineToolPartType(item.id as any)}
+                            className={`p-1.5 rounded-lg border text-[8.5px] font-black uppercase tracking-wider flex flex-col items-center justify-center gap-0.5 transition-all cursor-pointer ${
+                              lineToolPartType === item.id
+                                ? 'bg-cyan-500 text-neutral-950 border-cyan-400 font-black shadow-sm scale-[1.02]'
+                                : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-850'
+                            }`}
+                            title={item.desc}
+                          >
+                            <span className="truncate">{item.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Part Colors Configuration */}
+                    <div className="space-y-2 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800">
+                      <span className="text-[9px] text-neutral-300 font-bold uppercase tracking-wide block">Part Colors & Styling</span>
+
+                      {/* Stroke Color */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[8.5px] text-neutral-400 font-bold">Stroke Color:</span>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="color"
+                            value={lineToolPartStrokeColor || '#000000'}
+                            onChange={(e) => setLineToolPartStrokeColor && setLineToolPartStrokeColor(e.target.value)}
+                            className="w-5 h-5 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                          />
+                          <span className="text-[8.5px] font-mono text-neutral-300">{lineToolPartStrokeColor}</span>
+                        </div>
+                      </div>
+
+                      {/* Stroke Width */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[8.5px]">
+                          <span className="text-neutral-400">Stroke Thickness:</span>
+                          <span className="text-cyan-400 font-mono font-bold">{lineToolPartStrokeWidth}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="20"
+                          step="1"
+                          value={lineToolPartStrokeWidth}
+                          onChange={(e) => setLineToolPartStrokeWidth && setLineToolPartStrokeWidth(parseInt(e.target.value))}
+                          className="w-full h-1 bg-neutral-950 rounded appearance-none cursor-pointer accent-cyan-500"
+                        />
+                      </div>
+
+                      {/* Fill Color */}
+                      <div className="pt-1 border-t border-neutral-800/80 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[8.5px] text-neutral-400 font-bold">Part Fill Color:</span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setLineToolPartFillColor && setLineToolPartFillColor(lineToolPartFillColor === 'transparent' ? '#FFDFC4' : 'transparent')}
+                              className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase transition-all cursor-pointer ${
+                                lineToolPartFillColor === 'transparent'
+                                  ? 'bg-neutral-800 text-neutral-400 border border-neutral-700'
+                                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              }`}
+                            >
+                              {lineToolPartFillColor === 'transparent' ? 'No Fill' : 'Filled'}
+                            </button>
+                            {lineToolPartFillColor !== 'transparent' && (
+                              <input
+                                type="color"
+                                value={lineToolPartFillColor}
+                                onChange={(e) => setLineToolPartFillColor && setLineToolPartFillColor(e.target.value)}
+                                className="w-5 h-5 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                              />
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Quick Color Swatches */}
+                        <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                          {[
+                            { color: '#000000', label: 'Black' },
+                            { color: '#4A2E18', label: 'Dark Brown' },
+                            { color: '#8D5524', label: 'Brown' },
+                            { color: '#FFDFC4', label: 'Skin Tone' },
+                            { color: '#FCD5B4', label: 'Peach' },
+                            { color: '#FFFFFF', label: 'White' },
+                            { color: '#06B6D4', label: 'Cyan' },
+                            { color: '#F43F5E', label: 'Rose' },
+                          ].map((swatch) => (
+                            <button
+                              key={swatch.color}
+                              type="button"
+                              onClick={() => {
+                                if (setLineToolPartFillColor) setLineToolPartFillColor(swatch.color);
+                              }}
+                              className="w-4 h-4 rounded-full border border-neutral-600 hover:scale-125 transition-transform cursor-pointer shadow-sm"
+                              style={{ backgroundColor: swatch.color }}
+                              title={swatch.label}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* MODE 3: POINT EDIT CONTROLS */}
+                {lineToolMode === 'point_edit' && (
+                  <div className="space-y-3 animate-fade-in">
+                    {/* Point Placement Helper info */}
+                    <div className="space-y-2 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800 text-[8.5px] text-neutral-300">
+                      <div className="flex items-center gap-1.5 text-cyan-400 font-bold uppercase tracking-wider">
+                        <CircleDot className="w-3 h-3" />
+                        <span>Interactive Point Editor</span>
+                      </div>
+                      <ul className="space-y-1 list-disc pl-3.5 text-neutral-400 leading-normal">
+                        <li><b>Click on any stroke</b> to place a new point.</li>
+                        <li><b>Click & drag points</b> to reshape the stroke with point precision.</li>
+                        <li><b>Alt + Click / Right-Click</b> on a point to delete it.</li>
+                      </ul>
+                    </div>
+
+                    {/* Attached Sub-parts List on selected object */}
+                    {selectedObjectId && objects[selectedObjectId] && (
+                      <div className="space-y-1.5 bg-neutral-900/80 p-2.5 rounded-xl border border-neutral-800">
+                        <div className="flex items-center justify-between text-[9px]">
+                          <span className="text-neutral-300 font-bold uppercase tracking-wide">
+                            Sub-Parts ({objects[selectedObjectId].subPaths?.length || 0})
+                          </span>
+                          {objects[selectedObjectId].subPaths && objects[selectedObjectId].subPaths!.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                updateObject(selectedObjectId, { subPaths: [], subPathFills: {}, subPathStrokes: {} });
+                              }}
+                              className="text-[8px] text-rose-400 hover:text-rose-300 font-bold uppercase cursor-pointer"
+                            >
+                              Clear Parts
+                            </button>
+                          )}
+                        </div>
+
+                        {/* List subpaths */}
+                        {objects[selectedObjectId].subPaths && objects[selectedObjectId].subPaths!.length > 0 ? (
+                          <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                            {objects[selectedObjectId].subPaths!.map((sub, sIdx) => {
+                              const isSelectedPart = lineToolActiveSubPathIdx === sIdx;
+                              const currentColor = objects[selectedObjectId].subPathFills?.[sIdx] || objects[selectedObjectId].subPathStrokes?.[sIdx]?.strokeColor || '#06B6D4';
+                              return (
+                                <div
+                                  key={sIdx}
+                                  onClick={() => setLineToolActiveSubPathIdx && setLineToolActiveSubPathIdx(sIdx)}
+                                  className={`flex items-center justify-between p-1.5 rounded-lg border text-[8.5px] cursor-pointer transition-all ${
+                                    isSelectedPart
+                                      ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200'
+                                      : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:bg-neutral-900'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-1.5 truncate">
+                                    <div
+                                      className="w-2.5 h-2.5 rounded-full shrink-0 border border-white/20"
+                                      style={{ backgroundColor: currentColor }}
+                                    />
+                                    <span className="font-bold">Part #{sIdx + 1} ({sub.length} pts)</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="color"
+                                      value={objects[selectedObjectId].subPathFills?.[sIdx] || objects[selectedObjectId].subPathStrokes?.[sIdx]?.strokeColor || '#06B6D4'}
+                                      onChange={(e) => {
+                                        const newColor = e.target.value;
+                                        const curObj = objects[selectedObjectId];
+                                        const updatedFills = { ...(curObj.subPathFills || {}), [sIdx]: newColor };
+                                        const updatedStrokes = {
+                                          ...(curObj.subPathStrokes || {}),
+                                          [sIdx]: { ...(curObj.subPathStrokes?.[sIdx] || {}), strokeColor: newColor }
+                                        };
+                                        updateObject(selectedObjectId, { subPathFills: updatedFills, subPathStrokes: updatedStrokes });
+                                      }}
+                                      className="w-4 h-4 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                                      title="Change part color"
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const curObj = objects[selectedObjectId];
+                                        const filtered = (curObj.subPaths || []).filter((_, idx) => idx !== sIdx);
+                                        updateObject(selectedObjectId, { subPaths: filtered });
+                                        if (lineToolActiveSubPathIdx === sIdx) {
+                                          if (setLineToolActiveSubPathIdx) setLineToolActiveSubPathIdx(null);
+                                        }
+                                      }}
+                                      className="text-neutral-500 hover:text-rose-400 p-0.5 cursor-pointer"
+                                      title="Delete this part"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-[8px] text-neutral-500 italic text-center py-1">
+                            No extra sub-parts yet. Use &ldquo;Stretch Part&rdquo; to pull out new parts!
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

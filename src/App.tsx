@@ -739,9 +739,15 @@ export default function App() {
   const [adaptiveSubdivisionEnabled, setAdaptiveSubdivisionEnabled] = useState<boolean>(false);
   const [adaptiveSubdivisionPoints, setAdaptiveSubdivisionPoints] = useState<number>(3);
 
-  // Line Tool (LIN) shape reshape settings
+  // Line Tool (LIN) shape reshape & branch new parts settings
+  const [lineToolMode, setLineToolMode] = useState<'reshape' | 'extrude_part' | 'point_edit'>('reshape');
   const [lineToolRadius, setLineToolRadius] = useState<number>(80);
   const [lineToolSmoothness, setLineToolSmoothness] = useState<number>(0.75);
+  const [lineToolPartType, setLineToolPartType] = useState<'crease' | 'eyelash' | 'ear' | 'branch' | 'freeform'>('crease');
+  const [lineToolPartStrokeColor, setLineToolPartStrokeColor] = useState<string>('#000000');
+  const [lineToolPartFillColor, setLineToolPartFillColor] = useState<string>('transparent');
+  const [lineToolPartStrokeWidth, setLineToolPartStrokeWidth] = useState<number>(3);
+  const [lineToolActiveSubPathIdx, setLineToolActiveSubPathIdx] = useState<number | null>(null);
 
   // Apply Fill Forever state (defaults to true)
   const [applyFillForever, setApplyFillForever] = useState<boolean>(true);
@@ -3788,10 +3794,22 @@ export default function App() {
           }}
           activeTool={activeTool}
           setActiveTool={setActiveTool}
+          lineToolMode={lineToolMode}
+          setLineToolMode={setLineToolMode}
           lineToolRadius={lineToolRadius}
           setLineToolRadius={setLineToolRadius}
           lineToolSmoothness={lineToolSmoothness}
           setLineToolSmoothness={setLineToolSmoothness}
+          lineToolPartType={lineToolPartType}
+          setLineToolPartType={setLineToolPartType}
+          lineToolPartStrokeColor={lineToolPartStrokeColor}
+          setLineToolPartStrokeColor={setLineToolPartStrokeColor}
+          lineToolPartFillColor={lineToolPartFillColor}
+          setLineToolPartFillColor={setLineToolPartFillColor}
+          lineToolPartStrokeWidth={lineToolPartStrokeWidth}
+          setLineToolPartStrokeWidth={setLineToolPartStrokeWidth}
+          lineToolActiveSubPathIdx={lineToolActiveSubPathIdx}
+          setLineToolActiveSubPathIdx={setLineToolActiveSubPathIdx}
           brushSettings={brushSettings}
           setBrushSettings={setBrushSettings}
           add3DModel={add3DModel}
@@ -3888,10 +3906,22 @@ export default function App() {
           setStrokeMoveRadius={setStrokeMoveRadius}
           strokeMoveScope={strokeMoveScope}
           setStrokeMoveScope={setStrokeMoveScope}
+          lineToolMode={lineToolMode}
+          setLineToolMode={setLineToolMode}
           lineToolRadius={lineToolRadius}
           setLineToolRadius={setLineToolRadius}
           lineToolSmoothness={lineToolSmoothness}
           setLineToolSmoothness={setLineToolSmoothness}
+          lineToolPartType={lineToolPartType}
+          setLineToolPartType={setLineToolPartType}
+          lineToolPartStrokeColor={lineToolPartStrokeColor}
+          setLineToolPartStrokeColor={setLineToolPartStrokeColor}
+          lineToolPartFillColor={lineToolPartFillColor}
+          setLineToolPartFillColor={setLineToolPartFillColor}
+          lineToolPartStrokeWidth={lineToolPartStrokeWidth}
+          setLineToolPartStrokeWidth={setLineToolPartStrokeWidth}
+          lineToolActiveSubPathIdx={lineToolActiveSubPathIdx}
+          setLineToolActiveSubPathIdx={setLineToolActiveSubPathIdx}
           hideLassoSelection={hideLassoSelection}
           setHideLassoSelection={setHideLassoSelection}
           hideFslSelection={hideFslSelection}

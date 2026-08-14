@@ -1501,6 +1501,18 @@ interface CanvasAreaProps {
   setLineToolRadius?: (r: number) => void;
   lineToolSmoothness?: number;
   setLineToolSmoothness?: (s: number) => void;
+  lineToolMode?: 'reshape' | 'extrude_part' | 'point_edit';
+  setLineToolMode?: (mode: 'reshape' | 'extrude_part' | 'point_edit') => void;
+  lineToolPartType?: 'crease' | 'eyelash' | 'ear' | 'branch' | 'freeform';
+  setLineToolPartType?: (type: 'crease' | 'eyelash' | 'ear' | 'branch' | 'freeform') => void;
+  lineToolPartStrokeColor?: string;
+  setLineToolPartStrokeColor?: (color: string) => void;
+  lineToolPartFillColor?: string;
+  setLineToolPartFillColor?: (color: string) => void;
+  lineToolPartStrokeWidth?: number;
+  setLineToolPartStrokeWidth?: (width: number) => void;
+  lineToolActiveSubPathIdx?: number | null;
+  setLineToolActiveSubPathIdx?: (idx: number | null) => void;
   registerInverseDeformer?: (fn: (pts: Point[], obj: VectorObject) => Point[]) => void;
   masterControllers?: any[];
   onUpdateMasterControllers?: (widgets: any[]) => void;
@@ -1648,6 +1660,18 @@ export default function CanvasArea({
   setLineToolRadius,
   lineToolSmoothness = 0.75,
   setLineToolSmoothness,
+  lineToolMode = 'reshape',
+  setLineToolMode,
+  lineToolPartType = 'crease',
+  setLineToolPartType,
+  lineToolPartStrokeColor = '#000000',
+  setLineToolPartStrokeColor,
+  lineToolPartFillColor = 'transparent',
+  setLineToolPartFillColor,
+  lineToolPartStrokeWidth = 3,
+  setLineToolPartStrokeWidth,
+  lineToolActiveSubPathIdx = null,
+  setLineToolActiveSubPathIdx,
   registerInverseDeformer,
   masterControllers = EMPTY_ARRAY,
   onUpdateMasterControllers,
@@ -1709,6 +1733,9 @@ export default function CanvasArea({
   const lineToolInitialSubPathsRef = useRef<Point[][] | null>(null);
   const lineToolActivePtIdxRef = useRef<number>(-1);
   const lineToolActiveSubIdxRef = useRef<number>(-1);
+  const lineToolLivePartPointsRef = useRef<Point[] | null>(null);
+  const lineToolAnchorARef = useRef<Point | null>(null);
+  const lineToolAnchorBRef = useRef<Point | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const backCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -4338,23 +4365,148 @@ export default function CanvasArea({
       lineToolInitialPointsRef.current = JSON.parse(JSON.stringify(obj.points || []));
       lineToolInitialSubPathsRef.current = obj.subPaths ? JSON.parse(JSON.stringify(obj.subPaths)) : null;
 
-      // Find closest point or segment along the stroke line
+      // Find closest point and segment along stroke and all subpaths
       let closestPtIdx = -1;
       let closestSubIdx = -1;
-      let minPtDist = (lineToolRadius || 80) * 1.5;
+      let minPtDist = Infinity;
 
-      const allSubs: Point[][] = obj.subPaths && obj.subPaths.length > 0 ? obj.subPaths : [obj.points || []];
+      const allSubs: Point[][] = [obj.points || [], ...(obj.subPaths || [])];
       allSubs.forEach((sub, sIdx) => {
+        const actualSubIdx = sIdx === 0 ? -1 : sIdx - 1;
         sub.forEach((pt, pIdx) => {
-          const d = Math.hypot(pt.x - localStart.x, pt.y - localStart.y);
+          const wpt = localToWorld(pt, obj.transform, pivot);
+          const d = Math.hypot(wpt.x - coords.x, wpt.y - coords.y);
           if (d < minPtDist) {
             minPtDist = d;
             closestPtIdx = pIdx;
-            closestSubIdx = sIdx;
+            closestSubIdx = actualSubIdx;
           }
         });
       });
 
+      // MODE 3: POINT EDIT MODE (Place point on stroke, drag point to reshape, delete point)
+      if (lineToolMode === 'point_edit') {
+        const pointHitTolerance = 14 / zoomScale;
+
+        // Check if Alt-click or clicked directly on an existing point to delete/drag
+        if (minPtDist < pointHitTolerance && closestPtIdx >= 0) {
+          if (e.altKey || e.button === 2) {
+            // Delete clicked point
+            if (closestSubIdx === -1) {
+              if (obj.points && obj.points.length > 2) {
+                const newPts = obj.points.filter((_, idx) => idx !== closestPtIdx);
+                updateObjectProperties(obj.id, { points: newPts });
+                historyPush();
+              }
+            } else if (obj.subPaths && obj.subPaths[closestSubIdx]) {
+              const newSub = obj.subPaths[closestSubIdx].filter((_, idx) => idx !== closestPtIdx);
+              const newSubs = [...obj.subPaths];
+              if (newSub.length < 2) {
+                newSubs.splice(closestSubIdx, 1);
+              } else {
+                newSubs[closestSubIdx] = newSub;
+              }
+              updateObjectProperties(obj.id, { subPaths: newSubs });
+              historyPush();
+            }
+            return;
+          }
+
+          // Start dragging existing point
+          lineToolActivePtIdxRef.current = closestPtIdx;
+          lineToolActiveSubIdxRef.current = closestSubIdx;
+          if (closestSubIdx >= 0 && setLineToolActiveSubPathIdx) {
+            setLineToolActiveSubPathIdx(closestSubIdx);
+          }
+          setDragMode('lineToolMovePoint' as any);
+          setDragStartPoint(coords);
+          historyPush();
+          return;
+        }
+
+        // Clicked near a stroke segment -> Place a NEW POINT at this exact click location!
+        let bestSegSubIdx = -1;
+        let bestSegPIdx = -1;
+        let minSegDist = 28 / zoomScale;
+
+        allSubs.forEach((sub, sIdx) => {
+          const actualSubIdx = sIdx === 0 ? -1 : sIdx - 1;
+          const isClosed = actualSubIdx === -1 ? Boolean(obj.isClosed || obj.shapeType === 'circle' || obj.shapeType === 'rectangle') : false;
+          for (let i = 0; i < (isClosed ? sub.length : sub.length - 1); i++) {
+            const pA = localToWorld(sub[i], obj.transform, pivot);
+            const pB = localToWorld(sub[(i + 1) % sub.length], obj.transform, pivot);
+            const l2 = Math.hypot(pB.x - pA.x, pB.y - pA.y);
+            if (l2 === 0) continue;
+            const t = Math.max(0, Math.min(1, ((coords.x - pA.x) * (pB.x - pA.x) + (coords.y - pA.y) * (pB.y - pA.y)) / (l2 * l2)));
+            const projX = pA.x + t * (pB.x - pA.x);
+            const projY = pA.y + t * (pB.y - pA.y);
+            const d = Math.hypot(coords.x - projX, coords.y - projY);
+            if (d < minSegDist) {
+              minSegDist = d;
+              bestSegSubIdx = actualSubIdx;
+              bestSegPIdx = i;
+            }
+          }
+        });
+
+        if (bestSegPIdx >= 0) {
+          // Insert the new point at localStart between bestSegPIdx and bestSegPIdx + 1
+          const newPt = { x: Number(localStart.x.toFixed(2)), y: Number(localStart.y.toFixed(2)) };
+          if (bestSegSubIdx === -1) {
+            const newPts = [...(obj.points || [])];
+            newPts.splice(bestSegPIdx + 1, 0, newPt);
+            updateObjectProperties(obj.id, { points: newPts });
+            lineToolActivePtIdxRef.current = bestSegPIdx + 1;
+            lineToolActiveSubIdxRef.current = -1;
+          } else if (obj.subPaths && obj.subPaths[bestSegSubIdx]) {
+            const newSubs = [...obj.subPaths];
+            const newSub = [...newSubs[bestSegSubIdx]];
+            newSub.splice(bestSegPIdx + 1, 0, newPt);
+            newSubs[bestSegSubIdx] = newSub;
+            updateObjectProperties(obj.id, { subPaths: newSubs });
+            lineToolActivePtIdxRef.current = bestSegPIdx + 1;
+            lineToolActiveSubIdxRef.current = bestSegSubIdx;
+            if (setLineToolActiveSubPathIdx) setLineToolActiveSubPathIdx(bestSegSubIdx);
+          }
+          setDragMode('lineToolMovePoint' as any);
+          setDragStartPoint(coords);
+          historyPush();
+          return;
+        }
+
+        // If clicked on empty space in Point Edit mode, just select object
+        return;
+      }
+
+      // MODE 2: STRETCH / BRANCH NEW PART (Generates attached stroke/shape on this same drawing)
+      if (lineToolMode === 'extrude_part') {
+        // Find anchor points along the closest segment on the drawing's contour
+        let anchorA: Point = { x: localStart.x - 20, y: localStart.y };
+        let anchorB: Point = { x: localStart.x + 20, y: localStart.y };
+
+        const targetSub = (closestSubIdx >= 0 && obj.subPaths && obj.subPaths[closestSubIdx])
+          ? obj.subPaths[closestSubIdx]
+          : (obj.points || []);
+
+        if (targetSub.length >= 2 && closestPtIdx >= 0) {
+          const pPrev = targetSub[(closestPtIdx - 1 + targetSub.length) % targetSub.length];
+          const pCur = targetSub[closestPtIdx];
+          const pNext = targetSub[(closestPtIdx + 1) % targetSub.length];
+          anchorA = { x: Number(((pPrev.x + pCur.x) * 0.5).toFixed(2)), y: Number(((pPrev.y + pCur.y) * 0.5).toFixed(2)) };
+          anchorB = { x: Number(((pCur.x + pNext.x) * 0.5).toFixed(2)), y: Number(((pCur.y + pNext.y) * 0.5).toFixed(2)) };
+        }
+
+        lineToolAnchorARef.current = anchorA;
+        lineToolAnchorBRef.current = anchorB;
+        lineToolLivePartPointsRef.current = [anchorA, localStart, anchorB];
+
+        setDragMode('lineToolExtrude' as any);
+        setDragStartPoint(coords);
+        historyPush();
+        return;
+      }
+
+      // MODE 1: RESHAPE (Smooth contour pull and Laplacian tension)
       lineToolActivePtIdxRef.current = closestPtIdx;
       lineToolActiveSubIdxRef.current = closestSubIdx;
 
@@ -5630,6 +5782,178 @@ export default function CanvasArea({
             }
           };
         });
+      }
+      return;
+    }
+
+    if (dragMode === ('lineToolMovePoint' as any) && activeTargetId) {
+      const obj = objects[activeTargetId];
+      if (obj) {
+        const pivot = obj.pivots[0] || { localX: 0, localY: 0 };
+        const currentLocal = worldToLocal(coords, obj.transform, pivot);
+        const ptIdx = lineToolActivePtIdxRef.current;
+        const subIdx = lineToolActiveSubIdxRef.current;
+        const tension = lineToolSmoothness ?? 0.75;
+
+        if (subIdx === -1 && obj.points && ptIdx >= 0 && ptIdx < obj.points.length) {
+          const newPts = obj.points.map((p, idx) => {
+            if (idx === ptIdx) {
+              return { x: Number(currentLocal.x.toFixed(2)), y: Number(currentLocal.y.toFixed(2)) };
+            }
+            return p;
+          });
+
+          // Smooth neighbor tension
+          if (tension > 0.1 && newPts.length > 3) {
+            const count = newPts.length;
+            const isClosed = Boolean(obj.isClosed || obj.shapeType === 'circle' || obj.shapeType === 'rectangle');
+            const prevIdx = (ptIdx - 1 + count) % count;
+            const nextIdx = (ptIdx + 1) % count;
+            if (isClosed || ptIdx > 0) {
+              newPts[prevIdx] = {
+                x: Number((newPts[prevIdx].x * (1 - tension * 0.25) + currentLocal.x * (tension * 0.25)).toFixed(2)),
+                y: Number((newPts[prevIdx].y * (1 - tension * 0.25) + currentLocal.y * (tension * 0.25)).toFixed(2)),
+              };
+            }
+            if (isClosed || ptIdx < count - 1) {
+              newPts[nextIdx] = {
+                x: Number((newPts[nextIdx].x * (1 - tension * 0.25) + currentLocal.x * (tension * 0.25)).toFixed(2)),
+                y: Number((newPts[nextIdx].y * (1 - tension * 0.25) + currentLocal.y * (tension * 0.25)).toFixed(2)),
+              };
+            }
+          }
+
+          setObjects(prev => ({
+            ...prev,
+            [activeTargetId]: {
+              ...prev[activeTargetId],
+              points: newPts
+            }
+          }));
+        } else if (subIdx >= 0 && obj.subPaths && obj.subPaths[subIdx] && ptIdx >= 0 && ptIdx < obj.subPaths[subIdx].length) {
+          const targetSub = obj.subPaths[subIdx];
+          const newSub = targetSub.map((p, idx) => {
+            if (idx === ptIdx) {
+              return { x: Number(currentLocal.x.toFixed(2)), y: Number(currentLocal.y.toFixed(2)) };
+            }
+            return p;
+          });
+
+          if (tension > 0.1 && newSub.length > 3) {
+            const count = newSub.length;
+            const prevIdx = (ptIdx - 1 + count) % count;
+            const nextIdx = (ptIdx + 1) % count;
+            if (ptIdx > 0) {
+              newSub[prevIdx] = {
+                x: Number((newSub[prevIdx].x * (1 - tension * 0.25) + currentLocal.x * (tension * 0.25)).toFixed(2)),
+                y: Number((newSub[prevIdx].y * (1 - tension * 0.25) + currentLocal.y * (tension * 0.25)).toFixed(2)),
+              };
+            }
+            if (ptIdx < count - 1) {
+              newSub[nextIdx] = {
+                x: Number((newSub[nextIdx].x * (1 - tension * 0.25) + currentLocal.x * (tension * 0.25)).toFixed(2)),
+                y: Number((newSub[nextIdx].y * (1 - tension * 0.25) + currentLocal.y * (tension * 0.25)).toFixed(2)),
+              };
+            }
+          }
+
+          const newSubs = [...obj.subPaths];
+          newSubs[subIdx] = newSub;
+          setObjects(prev => ({
+            ...prev,
+            [activeTargetId]: {
+              ...prev[activeTargetId],
+              subPaths: newSubs
+            }
+          }));
+        }
+      }
+      return;
+    }
+
+    if (dragMode === ('lineToolExtrude' as any) && activeTargetId) {
+      const obj = objects[activeTargetId];
+      if (obj) {
+        const pivot = obj.pivots[0] || { localX: 0, localY: 0 };
+        const currentLocal = worldToLocal(coords, obj.transform, pivot);
+        const anchorA = lineToolAnchorARef.current || { x: currentLocal.x - 20, y: currentLocal.y };
+        const anchorB = lineToolAnchorBRef.current || { x: currentLocal.x + 20, y: currentLocal.y };
+
+        const generatedPts: Point[] = [];
+        const type = lineToolPartType || 'crease';
+
+        if (type === 'crease') {
+          // Smooth arch (ideal for eyelid blinking crease, double eyelids, facial wrinkles, muscle lines)
+          const steps = 18;
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const x = (1 - t) * (1 - t) * anchorA.x + 2 * (1 - t) * t * currentLocal.x + t * t * anchorB.x;
+            const y = (1 - t) * (1 - t) * anchorA.y + 2 * (1 - t) * t * currentLocal.y + t * t * anchorB.y;
+            generatedPts.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+          }
+        } else if (type === 'eyelash') {
+          // Sharp tapered stroke spike (ideal for eyelashes, hair spikes, fur tufts)
+          const steps = 12;
+          // Up to peak
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const x = anchorA.x * (1 - t) + currentLocal.x * t;
+            const y = anchorA.y * (1 - t) + currentLocal.y * t;
+            generatedPts.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+          }
+          // Down to anchorB
+          for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const x = currentLocal.x * (1 - t) + anchorB.x * t;
+            const y = currentLocal.y * (1 - t) + anchorB.y * t;
+            generatedPts.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+          }
+        } else if (type === 'ear') {
+          // Anatomical curved lobe loop (ears, horns, wings)
+          const midX = (anchorA.x + anchorB.x) * 0.5;
+          const midY = (anchorA.y + anchorB.y) * 0.5;
+          const normalX = -(anchorB.y - anchorA.y) * 0.5;
+          const normalY = (anchorB.x - anchorA.x) * 0.5;
+          const c1 = { x: anchorA.x + normalX + (currentLocal.x - midX) * 0.4, y: anchorA.y + normalY + (currentLocal.y - midY) * 0.4 };
+          const c2 = { x: anchorB.x + normalX + (currentLocal.x - midX) * 0.4, y: anchorB.y + normalY + (currentLocal.y - midY) * 0.4 };
+
+          const steps = 24;
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const omt = 1 - t;
+            const x = omt * omt * omt * anchorA.x + 3 * omt * omt * t * c1.x + 3 * omt * t * t * currentLocal.x + t * t * t * anchorB.x;
+            const y = omt * omt * omt * anchorA.y + 3 * omt * omt * t * c1.y + 3 * omt * t * t * currentLocal.y + t * t * t * anchorB.y;
+            generatedPts.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+          }
+        } else if (type === 'branch') {
+          // Nose / Snout / Ridge profile
+          const steps = 16;
+          const bridgePt = { x: anchorA.x * 0.4 + currentLocal.x * 0.6, y: anchorA.y * 0.4 + currentLocal.y * 0.6 };
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const omt = 1 - t;
+            const x = omt * omt * anchorA.x + 2 * omt * t * bridgePt.x + t * t * currentLocal.x;
+            const y = omt * omt * anchorA.y + 2 * omt * t * bridgePt.y + t * t * currentLocal.y;
+            generatedPts.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+          }
+          for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const x = currentLocal.x * (1 - t) + anchorB.x * t;
+            const y = currentLocal.y * (1 - t) + anchorB.y * t;
+            generatedPts.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+          }
+        } else {
+          // Freeform drag line
+          const existing = lineToolLivePartPointsRef.current || [anchorA];
+          const last = existing[existing.length - 1];
+          if (!last || Math.hypot(currentLocal.x - last.x, currentLocal.y - last.y) > 4) {
+            generatedPts.push(...existing, { x: Number(currentLocal.x.toFixed(2)), y: Number(currentLocal.y.toFixed(2)) });
+          } else {
+            generatedPts.push(...existing);
+          }
+        }
+
+        lineToolLivePartPointsRef.current = generatedPts;
       }
       return;
     }
@@ -7005,6 +7329,48 @@ export default function CanvasArea({
       lineToolInitialSubPathsRef.current = null;
       lineToolActivePtIdxRef.current = -1;
       lineToolActiveSubIdxRef.current = -1;
+    }
+
+    if (dragMode === ('lineToolMovePoint' as any)) {
+      lineToolActivePtIdxRef.current = -1;
+      lineToolActiveSubIdxRef.current = -1;
+      historyPush();
+    }
+
+    if (dragMode === ('lineToolExtrude' as any)) {
+      if (lineToolLivePartPointsRef.current && lineToolLivePartPointsRef.current.length >= 3 && selectedObjectId) {
+        const obj = objects[selectedObjectId];
+        if (obj) {
+          const existingSubs = obj.subPaths ? [...obj.subPaths] : [];
+          const newSubIdx = existingSubs.length;
+          const newPartPoints = [...lineToolLivePartPointsRef.current];
+          const newSubs = [...existingSubs, newPartPoints];
+          const newFills = { ...(obj.subPathFills || {}), [newSubIdx]: lineToolPartFillColor || 'transparent' };
+          const newStrokes = {
+            ...(obj.subPathStrokes || {}),
+            [newSubIdx]: {
+              strokeColor: lineToolPartStrokeColor || '#000000',
+              strokeWidth: lineToolPartStrokeWidth || 3
+            }
+          };
+
+          updateObjectProperties(obj.id, {
+            subPaths: newSubs,
+            subPathFills: newFills,
+            subPathStrokes: newStrokes
+          });
+
+          if (setLineToolActiveSubPathIdx) {
+            setLineToolActiveSubPathIdx(newSubIdx);
+          }
+          historyPush();
+        }
+      }
+      lineToolLivePartPointsRef.current = null;
+      lineToolAnchorARef.current = null;
+      lineToolAnchorBRef.current = null;
+      lineToolStartLocalRef.current = null;
+      lineToolStartWorldRef.current = null;
     }
 
     if (dragMode === ('strokePullDeform' as any)) {
@@ -8659,8 +9025,8 @@ export default function CanvasArea({
 
         ctx.save();
 
-        // 1. Influence radius indicator cursor preview
-        if (currentCursorPos) {
+        // 1. Mode-specific influence / action guides
+        if (currentCursorPos && lineToolMode === 'reshape') {
           ctx.beginPath();
           ctx.arc(currentCursorPos.x, currentCursorPos.y, R, 0, Math.PI * 2);
           ctx.fillStyle = 'rgba(6, 182, 212, 0.06)';
@@ -8673,22 +9039,24 @@ export default function CanvasArea({
         }
 
         // 2. Draw on-stroke lines for all paths of the selected drawing
-        subPathsToDraw.forEach((sub) => {
+        subPathsToDraw.forEach((sub, sIdx) => {
           if (!sub || sub.length < 2) return;
 
           // Convert all local stroke points to world space (with rotation, scale & pivot)
           const worldPoints = sub.map(p => localToWorld(p, obj.transform, localPivot));
+          const isMain = sIdx === 0;
+          const isTargetSub = lineToolActiveSubPathIdx !== null && sIdx - 1 === lineToolActiveSubPathIdx;
 
-          // A. Outer Luminous Glow Line (Cyan/Teal)
+          // A. Outer Luminous Glow Line
           ctx.beginPath();
           ctx.moveTo(worldPoints[0].x, worldPoints[0].y);
           for (let i = 1; i < worldPoints.length; i++) {
             ctx.lineTo(worldPoints[i].x, worldPoints[i].y);
           }
-          if (isClosed && worldPoints.length > 2) {
+          if (isClosed && isMain && worldPoints.length > 2) {
             ctx.closePath();
           }
-          ctx.strokeStyle = 'rgba(6, 182, 212, 0.45)';
+          ctx.strokeStyle = isTargetSub ? 'rgba(245, 158, 11, 0.6)' : 'rgba(6, 182, 212, 0.45)';
           ctx.lineWidth = 7 / zoomScale;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
@@ -8700,33 +9068,56 @@ export default function CanvasArea({
           for (let i = 1; i < worldPoints.length; i++) {
             ctx.lineTo(worldPoints[i].x, worldPoints[i].y);
           }
-          if (isClosed && worldPoints.length > 2) {
+          if (isClosed && isMain && worldPoints.length > 2) {
             ctx.closePath();
           }
-          ctx.strokeStyle = '#00F0FF';
+          ctx.strokeStyle = isTargetSub ? '#F59E0B' : '#00F0FF';
           ctx.lineWidth = 2.5 / zoomScale;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           ctx.stroke();
 
           // C. Interactive Grab Handles / Nodes along the line
-          const step = Math.max(1, Math.floor(worldPoints.length / 28));
-          for (let i = 0; i < worldPoints.length; i += step) {
-            const wpt = worldPoints[i];
-            const isNearCursor = currentCursorPos && Math.hypot(wpt.x - currentCursorPos.x, wpt.y - currentCursorPos.y) < R;
-            const nodeRadius = (isNearCursor ? 5.5 : 3.5) / zoomScale;
+          if (lineToolMode === 'point_edit') {
+            // In Point Edit mode: draw EVERY single vertex with interactive node styling
+            worldPoints.forEach((wpt, pIdx) => {
+              const isHovered = currentCursorPos && Math.hypot(wpt.x - currentCursorPos.x, wpt.y - currentCursorPos.y) < (12 / zoomScale);
+              const nodeRadius = (isHovered ? 6 : 4) / zoomScale;
 
-            ctx.beginPath();
-            ctx.arc(wpt.x, wpt.y, nodeRadius, 0, Math.PI * 2);
-            ctx.fillStyle = isNearCursor ? '#22D3EE' : '#06B6D4';
-            ctx.strokeStyle = '#FFFFFF';
-            ctx.lineWidth = 1.5 / zoomScale;
-            ctx.fill();
-            ctx.stroke();
+              ctx.beginPath();
+              ctx.arc(wpt.x, wpt.y, nodeRadius, 0, Math.PI * 2);
+              ctx.fillStyle = isHovered ? '#10B981' : (isTargetSub ? '#F59E0B' : '#00F0FF');
+              ctx.strokeStyle = '#FFFFFF';
+              ctx.lineWidth = 1.5 / zoomScale;
+              ctx.fill();
+              ctx.stroke();
+
+              // Center dot
+              ctx.beginPath();
+              ctx.arc(wpt.x, wpt.y, 1.5 / zoomScale, 0, Math.PI * 2);
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fill();
+            });
+          } else {
+            // Reshape & Extrude: sample nodes along stroke for grab reference
+            const step = Math.max(1, Math.floor(worldPoints.length / 28));
+            for (let i = 0; i < worldPoints.length; i += step) {
+              const wpt = worldPoints[i];
+              const isNearCursor = currentCursorPos && Math.hypot(wpt.x - currentCursorPos.x, wpt.y - currentCursorPos.y) < R;
+              const nodeRadius = (isNearCursor ? 5.5 : 3.5) / zoomScale;
+
+              ctx.beginPath();
+              ctx.arc(wpt.x, wpt.y, nodeRadius, 0, Math.PI * 2);
+              ctx.fillStyle = isNearCursor ? '#22D3EE' : '#06B6D4';
+              ctx.strokeStyle = '#FFFFFF';
+              ctx.lineWidth = 1.5 / zoomScale;
+              ctx.fill();
+              ctx.stroke();
+            }
           }
         });
 
-        // 3. Highlight closest grab point on the stroke line
+        // 3. Highlight closest grab point or show cursor hint
         if (currentCursorPos) {
           let closestWorldPt: Point | null = null;
           let minD = Infinity;
@@ -8742,12 +9133,78 @@ export default function CanvasArea({
             });
           });
 
-          if (closestWorldPt && minD < R) {
+          if (closestWorldPt && minD < (lineToolMode === 'point_edit' ? 20 / zoomScale : R)) {
             ctx.beginPath();
             ctx.arc(closestWorldPt.x, closestWorldPt.y, 7 / zoomScale, 0, Math.PI * 2);
             ctx.fillStyle = '#FFFFFF';
-            ctx.strokeStyle = '#00F0FF';
+            ctx.strokeStyle = lineToolMode === 'point_edit' ? '#10B981' : '#00F0FF';
             ctx.lineWidth = 2.5 / zoomScale;
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+
+        // 4. Live preview during STRETCH NEW PART extrusion
+        if (dragMode === ('lineToolExtrude' as any) && lineToolLivePartPointsRef.current && lineToolLivePartPointsRef.current.length >= 2) {
+          const liveWorldPts = lineToolLivePartPointsRef.current.map(p => localToWorld(p, obj.transform, localPivot));
+          const strokeColor = lineToolPartStrokeColor || '#000000';
+          const strokeWidth = (lineToolPartStrokeWidth || 3) / zoomScale;
+          const fillColor = lineToolPartFillColor || 'transparent';
+
+          // Optional Fill preview
+          if (fillColor !== 'transparent') {
+            ctx.beginPath();
+            ctx.moveTo(liveWorldPts[0].x, liveWorldPts[0].y);
+            for (let i = 1; i < liveWorldPts.length; i++) {
+              ctx.lineTo(liveWorldPts[i].x, liveWorldPts[i].y);
+            }
+            ctx.closePath();
+            ctx.fillStyle = fillColor;
+            ctx.fill();
+          }
+
+          // Live Stroke line
+          ctx.beginPath();
+          ctx.moveTo(liveWorldPts[0].x, liveWorldPts[0].y);
+          for (let i = 1; i < liveWorldPts.length; i++) {
+            ctx.lineTo(liveWorldPts[i].x, liveWorldPts[i].y);
+          }
+          ctx.strokeStyle = strokeColor;
+          ctx.lineWidth = strokeWidth;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke();
+
+          // Anchor points indicator
+          if (liveWorldPts.length >= 2) {
+            const pStart = liveWorldPts[0];
+            const pEnd = liveWorldPts[liveWorldPts.length - 1];
+            const pMid = liveWorldPts[Math.floor(liveWorldPts.length / 2)];
+
+            // Anchor A
+            ctx.beginPath();
+            ctx.arc(pStart.x, pStart.y, 5 / zoomScale, 0, Math.PI * 2);
+            ctx.fillStyle = '#10B981';
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 1.5 / zoomScale;
+            ctx.fill();
+            ctx.stroke();
+
+            // Anchor B
+            ctx.beginPath();
+            ctx.arc(pEnd.x, pEnd.y, 5 / zoomScale, 0, Math.PI * 2);
+            ctx.fillStyle = '#10B981';
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 1.5 / zoomScale;
+            ctx.fill();
+            ctx.stroke();
+
+            // Apex Pull node
+            ctx.beginPath();
+            ctx.arc(pMid.x, pMid.y, 6.5 / zoomScale, 0, Math.PI * 2);
+            ctx.fillStyle = '#F59E0B';
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 2 / zoomScale;
             ctx.fill();
             ctx.stroke();
           }
